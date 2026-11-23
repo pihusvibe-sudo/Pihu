@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "Pihu AI",
+    "slug": "pihu-ai",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "android": {
+      "package": "com.pihuai.companion",
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Pihu uses the camera for vision and profile photos."
+        }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Pihu uses the microphone for voice commands.",
+          "speechRecognitionPermission": "Pihu converts speech to text."
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}
