@@ -16,10 +16,66 @@
     "expo-speech-recognition": "sdk-54",
     "expo-status-bar": "~3.0.0",
     "expo-secure-store": "~15.0.0",
-    "@react-native-async-storage/async-storage": "2.2.0"
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "react-native-bluetooth-classic": "^1.60.0-rc.1"
   },
   "devDependencies": {
     "typescript": "~5.9.2",
     "@types/react": "~19.1.10"
+  }
+}
+```[span_2](start_span)[span_2](end_span)
+
+---
+
+### Step 2: Integrated Robot Bridge (`src/hardware.ts`)
+
+Ek naye file `src/hardware.ts` mein ESP8266 Wi-Fi aur HC-05 Bluetooth dono ka hardware control helper banayein:
+
+```typescript
+import RNBluetoothClassic, { BluetoothDevice } from 'react-native-bluetooth-classic';
+
+let activeDevice: BluetoothDevice | null = null;
+
+// 1. ESP8266 HTTP Link
+export async function sendEspEmotion(espIp: string, state: string, conn: string = "BT_OK", move: string = "S") {
+  if (!espIp) return;
+  const cleanIp = espIp.replace(/^http:\/\//, '').trim();
+  const url = `http://${cleanIp}/emotion?state=${encodeURIComponent(state)}&conn=${encodeURIComponent(conn)}&move=${encodeURIComponent(move)}`;
+  try {
+    await fetch(url, { method: 'GET', headers: { 'Accept': 'application/json' } });
+  } catch (e) {
+    console.log("ESP8266 update error:", e);
+  }
+}
+
+// 2. HC-05 Bluetooth Motion Control
+export async function connectHc05(addressOrName: string): Promise<boolean> {
+  try {
+    const bonded = await RNBluetoothClassic.getBondedDevices();
+    const device = bonded.find(d => d.address === addressOrName || d.name === addressOrName || d.name?.includes("HC-05"));
+    if (!device) return false;
+    
+    const connected = await device.isConnected();
+    if (connected) {
+      activeDevice = device;
+      return true;
+    }
+    
+    const success = await device.connect();
+    if (success) activeDevice = device;
+    return success;
+  } catch (e) {
+    console.log("HC-05 connect error:", e);
+    return false;
+  }
+}
+
+export async function sendRobotCommand(cmd: string) {
+  if (!activeDevice) return;
+  try {
+    await activeDevice.write(cmd);
+  } catch (e) {
+    console.log("HC-05 write error:", e);
   }
 }
