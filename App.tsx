@@ -15,7 +15,7 @@ import {
 } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Speech from "expo-speech";
-import { SpeechRecognition } from "expo-speech-recognition";
+import { ExpoSpeechRecognitionModule } from "expo-speech-recognition";
 import {
   getKey,
   putKey,
@@ -29,13 +29,7 @@ import {
   EmotionTag,
   RobotAction,
 } from "./src/gemini";
-import {
-  sendEspEmotion,
-  sendEspMove,
-  connectBt,
-  sendBtMove,
-  scanBtDevices,
-} from "./src/hardware";
+import { sendEspEmotion, connectHc05, sendRobotCommand } from "./src/hardware";
 
 type Mode = "HOME" | "CHAT" | "ADVANCED" | "MEMORIES" | "PEOPLE" | "SETTINGS";
 
@@ -138,8 +132,7 @@ export default function App() {
       await sendEspEmotion(espIp, emotion);
     }
     if (move) {
-      if (espIp) await sendEspMove(espIp, move);
-      if (btConnected) await sendBtMove(move);
+      await sendRobotCommand(move);
     }
   };
 
@@ -200,18 +193,18 @@ export default function App() {
 
   const startSpeechToText = async () => {
     try {
-      const result = await SpeechRecognition.requestPermissionAsync();
+      const result = await ExpoSpeechRecognitionModule.requestPermissionAsync();
       if (!result.granted) {
         Alert.alert("Permission Error", "Microphone access is required for voice commands.");
         return;
       }
       setIsListening(true);
-      SpeechRecognition.start({
+      ExpoSpeechRecognitionModule.start({
         lang: "hi-IN",
         interimResults: false,
         maxAlternatives: 1,
       });
-      SpeechRecognition.addListener("result", (event: any) => {
+      ExpoSpeechRecognitionModule.addListener("result", (event: any) => {
         const text = event.results?.[0]?.transcript;
         if (text) {
           setInputText(text);
@@ -509,17 +502,9 @@ export default function App() {
             <TouchableOpacity
               style={[styles.actionBtn, { marginTop: 25, backgroundColor: "#2e7d32" }]}
               onPress={async () => {
-                const devs = await scanBtDevices();
-                const target = devs.find((d: any) =>
-                  (d.name || "").includes("HC-05")
-                );
-                if (target) {
-                  const ok = await connectBt(target.address);
-                  setBtConnected(ok);
-                  Alert.alert(ok ? "Connected" : "Failed", ok ? "HC-05 Paired!" : "Connection failed.");
-                } else {
-                  Alert.alert("Not Found", "HC-05 Bluetooth module not found in paired list.");
-                }
+                const ok = await connectHc05("HC-05");
+                setBtConnected(ok);
+                Alert.alert(ok ? "Connected" : "Failed", ok ? "HC-05 Connected!" : "HC-05 connection failed.");
               }}
             >
               <Text style={styles.actionBtnText}>Connect HC-05 Bluetooth</Text>

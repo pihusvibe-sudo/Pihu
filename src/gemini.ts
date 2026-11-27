@@ -185,3 +185,53 @@ export async function askGeminiStructured(
     "If the user asks to move/drive/turn/stop the robot, include [MOVE:F], [MOVE:B], [MOVE:L], [MOVE:R], or [MOVE:S].",
     "Always end your response with [EMOTION:TAG] where TAG is one of HAPPY, SAD, ANGRY, EXCITED, SHY, JEALOUS, LONELY, CURIOUS, CARING.",
   ];
+
+  const userParts: any[] = [];
+  if (base64Image) {
+    userParts.push({
+      inlineData: {
+        mimeType: "image/jpeg",
+        data: base64Image,
+      },
+    });
+  }
+  userParts.push({ text: prompt });
+
+  const contents = [
+    ...history.map((m) => ({
+      role: m.role === "user" ? "user" : "model",
+      parts: [{ text: m.text }],
+    })),
+    { role: "user", parts: userParts },
+  ];
+
+  const systemText = memory
+    ? `${systemInstruction.join("\n")}\nMemory: ${memory}`
+    : systemInstruction.join("\n");
+
+  const payload: Record<string, unknown> = {
+    contents,
+    systemInstruction: {
+      parts: [{ text: systemText }],
+    },
+  };
+
+  const res = await runWithMultiModelFailover(apiKey, payload);
+  const rawText = res.reply || "";
+  const emotionMatch = rawText.match(/\[EMOTION:([A-Z_]+)\]/i);
+  const moveMatch = rawText.match(/\[MOVE:([FBLRS])\]/i);
+
+  const emotion = (emotionMatch?.[1]?.toUpperCase() || res.emotion || "HAPPY") as EmotionTag;
+  const move = (moveMatch?.[1]?.toUpperCase() || res.move || undefined) as RobotAction;
+  const reply = rawText
+    .replace(/\[EMOTION:[A-Z_]+\]/gi, "")
+    .replace(/\[MOVE:[FBLRS]\]/gi, "")
+    .trim();
+
+  return {
+    ...res,
+    reply: reply || rawText.trim(),
+    emotion,
+    move,
+  };
+}
