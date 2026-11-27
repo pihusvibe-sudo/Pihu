@@ -46,13 +46,16 @@ export default function App() {
   const [memoryText, setMemoryText] = useState("");
   const [people, setPeople] = useState<Person[]>([]);
 
+  // Advanced Mode State
   const [permission, requestPermission] = useCameraPermissions();
   const [isListening, setIsListening] = useState(false);
   const cameraRef = useRef<any>(null);
 
+  // Live Animated Face (Eye Blink & Scale Pulse)
   const blinkAnim = useRef(new Animated.Value(1)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
+  // Handle Hardware Back Button for Navigation
   useEffect(() => {
     const backAction = () => {
       if (mode !== "HOME") {
@@ -68,6 +71,7 @@ export default function App() {
     return () => backHandler.remove();
   }, [mode]);
 
+  // Load Saved Configuration on Startup
   useEffect(() => {
     (async () => {
       const k = await getKey();
@@ -81,6 +85,7 @@ export default function App() {
     })();
   }, []);
 
+  // Continuous Eye Blink & Face Motion Animation Loop
   useEffect(() => {
     const blinkLoop = Animated.loop(
       Animated.sequence([
@@ -126,6 +131,7 @@ export default function App() {
     };
   }, [blinkAnim, pulseAnim]);
 
+  // Sync Emotion and Movement to Hardware (ESP8266 & Arduino UNO)
   const syncHardware = async (emotion: EmotionTag, move: RobotAction) => {
     setCurrentEmotion(emotion);
     if (espIp) {
@@ -136,6 +142,7 @@ export default function App() {
     }
   };
 
+  // Process Pihu Interaction (Text/Voice/Vision)
   const processQuery = async (prompt: string, imageBase64?: string) => {
     if (!prompt.trim() && !imageBase64) return;
     if (!apiKey.trim()) {
@@ -161,6 +168,7 @@ export default function App() {
       setMessages((prev) => [...prev, botMsg]);
       if (res.modelUsed) setActiveModel(res.modelUsed);
 
+      // Hardware Sync & Speech Output
       await syncHardware(res.emotion, res.move);
       Speech.speak(res.reply, { language: "hi-IN" });
     } catch (e: any) {
@@ -174,6 +182,7 @@ export default function App() {
     }
   };
 
+  // Advanced Mode Camera Capture & Query
   const captureAndProcess = async () => {
     if (cameraRef.current) {
       try {
@@ -191,6 +200,7 @@ export default function App() {
     }
   };
 
+  // Voice Command Listener
   const startSpeechToText = async () => {
     try {
       const result = await ExpoSpeechRecognitionModule.requestPermissionAsync();
@@ -217,6 +227,7 @@ export default function App() {
     }
   };
 
+  // Render Top Header with Back Navigation
   const renderHeader = (title: string) => (
     <View style={styles.headerRow}>
       {mode !== "HOME" && (
@@ -231,6 +242,7 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* HOME MODE — Visual Interactive Face & Dashboard */}
       {mode === "HOME" && (
         <View style={styles.homeContainer}>
           <Text style={styles.title}>PIHU AI COMPANION</Text>
@@ -238,6 +250,7 @@ export default function App() {
             Status: {btConnected ? "BT Connected" : "BT Disconnected"} | IP: {espIp}
           </Text>
 
+          {/* Animated Interactive Face Display */}
           <Animated.View
             style={[
               styles.faceContainer,
@@ -275,6 +288,7 @@ export default function App() {
             <Text style={styles.emotionLabel}>{currentEmotion}</Text>
           </Animated.View>
 
+          {/* Core Navigation Buttons */}
           <View style={styles.menuGrid}>
             <TouchableOpacity style={styles.menuCard} onPress={() => setMode("CHAT")}>
               <Text style={styles.menuIcon}>💬</Text>
@@ -299,6 +313,7 @@ export default function App() {
         </View>
       )}
 
+      {/* ADVANCED MODE — Camera Vision + Real-Time Command & Control */}
       {mode === "ADVANCED" && (
         <View style={styles.flexContainer}>
           {renderHeader("Advanced Vision & Hardware Control")}
@@ -317,6 +332,7 @@ export default function App() {
                 </View>
               </CameraView>
 
+              {/* Manual Direct Motor Drive Pad */}
               <View style={styles.drivePadContainer}>
                 <Text style={styles.padTitle}>Manual Override Commands</Text>
                 <View style={styles.driveRow}>
@@ -357,6 +373,7 @@ export default function App() {
                 </View>
               </View>
 
+              {/* Bottom Interactive Bar */}
               <View style={styles.advInputRow}>
                 <TouchableOpacity
                   style={[styles.micBtn, isListening && styles.micActive]}
@@ -390,6 +407,7 @@ export default function App() {
         </View>
       )}
 
+      {/* CHAT MODE */}
       {mode === "CHAT" && (
         <View style={styles.flexContainer}>
           {renderHeader("Chat with Pihu")}
@@ -433,6 +451,7 @@ export default function App() {
         </View>
       )}
 
+      {/* MEMORIES MODE */}
       {mode === "MEMORIES" && (
         <View style={styles.flexContainer}>
           {renderHeader("Robot Memory Notes")}
@@ -460,6 +479,7 @@ export default function App() {
         </View>
       )}
 
+      {/* SETTINGS MODE */}
       {mode === "SETTINGS" && (
         <ScrollView style={styles.flexContainer}>
           {renderHeader("Hardware & API Setup")}
