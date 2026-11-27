@@ -13,7 +13,7 @@ import {
   BackHandler,
   Alert,
 } from "react-native";
-import { Camera, CameraView, useCameraPermissions } from "expo-camera";
+import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Speech from "expo-speech";
 import { SpeechRecognition } from "expo-speech-recognition";
 import {
@@ -28,7 +28,7 @@ import {
   askGeminiStructured,
   EmotionTag,
   RobotAction,
-} from "./src/gemini.ts";
+} from "./src/gemini";
 import {
   sendEspEmotion,
   sendEspMove,
@@ -135,7 +135,7 @@ export default function App() {
       blinkLoop.stop();
       pulseLoop.stop();
     };
-  }, []);
+  }, [blinkAnim, pulseAnim]);
 
   // Sync Emotion and Movement to Hardware (ESP8266 & Arduino UNO)
   const syncHardware = async (emotion: EmotionTag, move: RobotAction) => {
@@ -605,4 +605,27 @@ const styles = StyleSheet.create({
   drivePadContainer: { backgroundColor: "#1e293b", padding: 12, alignItems: "center" },
   padTitle: { color: "#94a3b8", fontSize: 11, marginBottom: 6 },
   driveRow: { flexDirection: "row", marginVertical: 4 },
-  driveBtn: { backgroundColor: "#334155", paddingVertical: 8, paddingHorizontal: 1
+  driveBtn: { backgroundColor: "#334155", paddingVertical: 8, paddingHorizontal: 16, borderRadius: 8, marginHorizontal: 4 },
+  stopBtn: { backgroundColor: "#dc2626" },
+  driveText: { color: "#fff", fontWeight: "bold", fontSize: 12 },
+  advInputRow: { flexDirection: "row", padding: 10, backgroundColor: "#0f172a", alignItems: "center" },
+  advInput: { flex: 1, backgroundColor: "#1e293b", color: "#fff", borderRadius: 8, paddingHorizontal: 12, height: 42, marginHorizontal: 8 },
+  micBtn: { backgroundColor: "#0284c7", padding: 10, borderRadius: 8 },
+  micActive: { backgroundColor: "#ef4444" },
+  micText: { color: "#fff", fontSize: 13, fontWeight: "bold" },
+  snapBtn: { backgroundColor: "#16a34a", paddingVertical: 10, paddingHorizontal: 14, borderRadius: 8 },
+  snapBtnText: { color: "#fff", fontWeight: "bold" },
+  chatScroll: { flex: 1, padding: 15 },
+  msgBubble: { padding: 12, borderRadius: 12, marginBottom: 10, maxWidth: "80%" },
+  msgUser: { backgroundColor: "#0284c7", alignSelf: "flex-end" },
+  msgModel: { backgroundColor: "#334155", alignSelf: "flex-start" },
+  msgText: { color: "#fff", fontSize: 14 },
+  padded: { padding: 20 },
+  darkText: { color: "#f8fafc", marginBottom: 10 },
+  label: { color: "#94a3b8", marginBottom: 5, fontSize: 13 },
+  input: { backgroundColor: "#1e293b", color: "#fff", borderRadius: 8, padding: 12, marginBottom: 12 },
+  memoryBox: { backgroundColor: "#1e293b", color: "#fff", borderRadius: 8, padding: 12, height: 120, textAlignVertical: "top", marginBottom: 12 },
+  actionBtn: { backgroundColor: "#0284c7", padding: 14, borderRadius: 8, alignItems: "center" },
+  actionBtnText: { color: "#fff", fontWeight: "bold" },
+  centered: { flex: 1, justifyContent: "center", alignItems: "center" },
+});
