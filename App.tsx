@@ -389,6 +389,28 @@ export default function App() {
                   value={inputText}
                   onChangeText={setInputText}
                 />
+        <TouchableOpacity
+          onPress={async () => {
+            try {
+              const perm = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+              if (!perm.granted) return;
+              setIsListening(true);
+              ExpoSpeechRecognitionModule.start({ lang: "hi-IN", interimResults: false, maxAlternatives: 1 });
+              ExpoSpeechRecognitionModule.addListener("result", (ev: any) => {
+                const spoken = ev.results?.[0]?.transcript;
+                if (spoken) {
+                  setInputText(spoken);
+                }
+                setIsListening(false);
+              });
+            } catch (_) {
+              setIsListening(false);
+            }
+          }}
+          style={{ paddingHorizontal: 12, paddingVertical: 10, borderRadius: 20, backgroundColor: isListening ? "#e11d48" : "#2563eb", marginLeft: 6 }}
+        >
+          <Text style={{ color: "#fff", fontWeight: "700" }}>{isListening ? "Stop" : "Mic"}</Text>
+        </TouchableOpacity>
 
                 <TouchableOpacity
                   style={styles.snapBtn}
