@@ -1,237 +1,91 @@
-import { Msg } from "./store";
-
-const MODEL_CANDIDATES = [
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
-  "gemini-2.0-flash",
-  "gemini-3.8-flash",
-];
-
-const API_VERSION = "v1beta";
-
-export type RobotAction = "F" | "B" | "L" | "R" | "S" | null;
 export type EmotionTag =
-  | "HAPPY"
-  | "SAD"
-  | "ANGRY"
-  | "EXCITED"
-  | "SHY"
-  | "JEALOUS"
-  | "LONELY"
-  | "CURIOUS"
-  | "CARING";
+  | "neutral" | "happy" | "sad" | "angry" | "surprised" | "thinking" | "excited" | "confused"
+  | "NEUTRAL" | "HAPPY" | "SAD" | "ANGRY" | "SURPRISED" | "THINKING" | "EXCITED" | "CONFUSED";
 
-export type PihuResponse = {
+export type RobotAction =
+  | "none" | "wave" | "nod" | "shake" | "spin" | "forward" | "backward" | "left" | "right" | "stop"
+  | "F" | "B" | "L" | "R" | "S";
+
+export interface StructuredReply {
   reply: string;
   emotion: EmotionTag;
+  action: RobotAction;
   move: RobotAction;
   modelUsed?: string;
-};
+}
 
-const VALID_EMOTIONS: EmotionTag[] = [
-  "HAPPY",
-  "SAD",
-  "ANGRY",
-  "EXCITED",
-  "SHY",
-  "JEALOUS",
-  "LONELY",
-  "CURIOUS",
-  "CARING",
+const MODELS = [
+  "gemini-3.8-flash",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "gemini-1.5-flash",
 ];
 
-function requireKey(key: string): string {
-  const clean = (key || "").trim();
-  if (!clean) {
-    throw new Error("Gemini API key missing. Open Settings and save your API key.");
-  }
-  return clean;
-}
-
-function parseStructuredReply(rawText: string, modelUsed?: string): PihuResponse {
-  const cleaned = rawText.trim();
-  let emotion: EmotionTag = "HAPPY";
-  let move: RobotAction = null;
-  let reply = cleaned;
-
-  const emoMatch = cleaned.match(/\[EMOTION:\s*([A-Z]+)\]/i);
-  if (emoMatch) {
-    const candidate = emoMatch[1].toUpperCase() as EmotionTag;
-    if (VALID_EMOTIONS.includes(candidate)) {
-      emotion = candidate;
-    }
-    reply = reply.replace(emoMatch[0], "").trim();
-  } else {
-    const upper = cleaned.toUpperCase();
-    for (const emo of VALID_EMOTIONS) {
-      if (upper.includes(emo)) {
-        emotion = emo;
-        break;
-      }
-    }
-  }
-
-  const moveMatch = cleaned.match(/\[MOVE:\s*([FBLRS])\]/i);
-  if (moveMatch) {
-    move = moveMatch[1].toUpperCase() as RobotAction;
-    reply = reply.replace(moveMatch[0], "").trim();
-  }
-
-  return {
-    reply: reply || "Haan, main sun rahi hoon!",
-    emotion,
-    move,
-    modelUsed,
-  };
-}
-
-async function callSingleModel(
+async function callModel(
   model: string,
+  prompt: string,
   apiKey: string,
-  payload: Record<string, unknown>,
-  timeoutMs: number = 9000
-): Promise<PihuResponse> {
-  const url = `https://generativelanguage.googleapis.com/${API_VERSION}/models/${model}:generateContent?key=${encodeURIComponent(
-    apiKey
-  )}`;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-
+  memoryText?: string,
+  imageBase64?: string | null
+): Promise<StructuredReply> {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const combinedText = memoryText ? `Context: ${memoryText}\n\nUser: ${prompt}` : prompt;
+  const parts: any[] = [{ text: combinedText }];
+  if (imageBase64) {
+    const cleanB64 = imageBase64.replace(/^data:image\/[a-zA-Z0-9+.-]+;base64,/, "");
+    parts.push({ inline_data: { mime_type: "image/jpeg", data: cleanB64 } });
+  }
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts }],
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`${model} HTTP ${res.status}`);
+  }
+  const data: any = await res.json();
+  const raw = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || "").join("").trim() || "";
+  if (!raw) {
+    throw new Error(`${model} empty reply`);
+  }
+  const cleaned = raw.replace(/^```json\s*|```$/gim, "").trim();
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: controller.signal,
-      body: JSON.stringify(payload),
-    });
-
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const msg = data?.error?.message || `HTTP ${res.status}`;
-      throw new Error(`[${model}] ${msg}`);
-    }
-
-    const rawText =
-      data?.candidates?.[0]?.content?.parts
-        ?.map((p: { text?: string }) => p.text || "")
-        .join("")
-        .trim() || "";
-
-    if (!rawText) {
-      throw new Error(`[${model}] Empty reply`);
-    }
-
-    return parseStructuredReply(rawText, model);
-  } catch (err: any) {
-    if (err?.name === "AbortError") {
-      throw new Error(`[${model}] Timeout`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
+    const parsed = JSON.parse(cleaned);
+    const act = (parsed?.action || parsed?.move || "none") as RobotAction;
+    return {
+      reply: typeof parsed?.reply === "string" && parsed.reply.trim() ? parsed.reply.trim() : cleaned,
+      emotion: (parsed?.emotion || "happy") as EmotionTag,
+      action: act,
+      move: act,
+      modelUsed: model,
+    };
+  } catch (_) {
+    return { reply: cleaned, emotion: "happy", action: "none", move: "none", modelUsed: model };
   }
-}
-
-/**
- * Runs top candidate models in parallel and returns the first valid fast response;
- * automatically falls back through remaining candidates if any fail.
- */
-async function runWithMultiModelFailover(
-  apiKey: string,
-  payload: Record<string, unknown>
-): Promise<PihuResponse> {
-  const cleanKey = requireKey(apiKey);
-  const errors: string[] = [];
-
-  // Batch 1: Parallel race across primary models for lowest latency
-  const parallelBatch = MODEL_CANDIDATES.slice(0, 3);
-  const raceResults = await Promise.allSettled(
-    parallelBatch.map((m) => callSingleModel(m, cleanKey, payload, 9000))
-  );
-
-  for (const r of raceResults) {
-    if (r.status === "fulfilled") {
-      return r.value;
-    }
-    errors.push(r.reason?.message || "Unknown model error");
-  }
-
-  // Batch 2: Sequential fallback across any remaining models
-  const remainingModels = MODEL_CANDIDATES.slice(3);
-  for (const m of remainingModels) {
-    try {
-      return await callSingleModel(m, cleanKey, payload, 10000);
-    } catch (err: any) {
-      errors.push(err?.message || `Failed on ${m}`);
-    }
-  }
-
-  throw new Error(
-    `All models failed. Please check API key or connection. (${errors.slice(-2).join(" | ")})`
-  );
 }
 
 export async function askGeminiStructured(
-  apiKey: string,
   prompt: string,
-  history: Msg[] = [],
-  memory: string = "",
-  base64Image?: string
-): Promise<PihuResponse> {
-  const systemInstruction = [
-    "You are Pihu, a fast, expressive, warm AI companion robot with an Arduino UNO + HC-05 + ESP8266 face.",
-    "Reply briefly and naturally in Hindi, English, or Hinglish matching the user.",
-    "If the user asks to move/drive/turn/stop the robot, include [MOVE:F], [MOVE:B], [MOVE:L], [MOVE:R], or [MOVE:S].",
-    "Always end your response with [EMOTION:TAG] where TAG is one of HAPPY, SAD, ANGRY, EXCITED, SHY, JEALOUS, LONELY, CURIOUS, CARING.",
-  ];
-
-  const userParts: any[] = [];
-  if (base64Image) {
-    userParts.push({
-      inlineData: {
-        mimeType: "image/jpeg",
-        data: base64Image,
-      },
-    });
+  apiKey?: string,
+  _messages?: any,
+  memoryText?: string,
+  imageBase64?: string | null
+): Promise<StructuredReply> {
+  const key = (apiKey || process.env.EXPO_PUBLIC_GEMINI_API_KEY || "").trim();
+  if (!key) {
+    return {
+      reply: "Gemini API key missing hai. Kripya API key set karein.",
+      emotion: "confused",
+      action: "none",
+      move: "none",
+      modelUsed: "none",
+    };
   }
-  userParts.push({ text: prompt });
-
-  const contents = [
-    ...history.map((m) => ({
-      role: m.role === "user" ? "user" : "model",
-      parts: [{ text: m.text }],
-    })),
-    { role: "user", parts: userParts },
-  ];
-
-  const systemText = memory
-    ? `${systemInstruction.join("\n")}\nMemory: ${memory}`
-    : systemInstruction.join("\n");
-
-  const payload: Record<string, unknown> = {
-    contents,
-    systemInstruction: {
-      parts: [{ text: systemText }],
-    },
-  };
-
-  const res = await runWithMultiModelFailover(apiKey, payload);
-  const rawText = res.reply || "";
-  const emotionMatch = rawText.match(/\[EMOTION:([A-Z_]+)\]/i);
-  const moveMatch = rawText.match(/\[MOVE:([FBLRS])\]/i);
-
-  const emotion = (emotionMatch?.[1]?.toUpperCase() || res.emotion || "HAPPY") as EmotionTag;
-  const move = (moveMatch?.[1]?.toUpperCase() || res.move || undefined) as RobotAction;
-  const reply = rawText
-    .replace(/\[EMOTION:[A-Z_]+\]/gi, "")
-    .replace(/\[MOVE:[FBLRS]\]/gi, "")
-    .trim();
-
-  return {
-    ...res,
-    reply: reply || rawText.trim(),
-    emotion,
-    move,
-  };
+  try {
+    return await Promise.any(MODELS.map((m) => callModel(m, prompt, key, memoryText, imageBase64)));
+  } catch (_) {
+    throw new Error("All models failed in parallel race.");
+  }
 }
