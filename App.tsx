@@ -1,608 +1,608 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
-  SafeAreaView,
-  View,
-  Text,
-  TextInput,
-  Pressable,
-  ScrollView,
-  FlatList,
-  Image,
-  Alert,
-  ActivityIndicator,
   StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
+  Text,
+  View,
+  TouchableOpacity,
+  TextInput,
+  ScrollView,
+  SafeAreaView,
+  ActivityIndicator,
+  Animated,
+  Easing,
+  BackHandler,
+  Alert,
 } from "react-native";
-import { StatusBar } from "expo-status-bar";
-import { CameraView, useCameraPermissions } from "expo-camera";
+import { Camera, CameraView, useCameraPermissions } from "expo-camera";
 import * as Speech from "expo-speech";
+import { SpeechRecognition } from "expo-speech-recognition";
 import {
-  ExpoSpeechRecognitionModule,
-  useSpeechRecognitionEvent,
-} from "expo-speech-recognition";
-import { askGemini, visionGemini } from "./src/gemini";
-import { getKey, putKey, load, save, Msg, Person } from "./src/store";
-import { sendEspEmotion, connectHc05, sendRobotCommand } from "./src/hardware";
+  getKey,
+  putKey,
+  load,
+  save,
+  Msg,
+  Person,
+} from "./src/store";
+import {
+  askGeminiStructured,
+  EmotionTag,
+  RobotAction,
+} from "./src/gemini.ts";
+import {
+  sendEspEmotion,
+  sendEspMove,
+  connectBt,
+  sendBtMove,
+  scanBtDevices,
+} from "./src/hardware";
 
-const bg = "#090D18",
-  panel = "#121A2A",
-  line = "#263650",
-  white = "#F4F7FF",
-  muted = "#9AAAC4",
-  cyan = "#55D9F5",
-  blue = "#4E7BFF";
-
-type Tab = "Home" | "Chat" | "Vision" | "Memory" | "Settings";
-
-const EMOTIONS = [
-  "HAPPY",
-  "SAD",
-  "ANGRY",
-  "EXCITED",
-  "SHY",
-  "JEALOUS",
-  "LONELY",
-  "CURIOUS",
-  "CARING",
-] as const;
+type Mode = "HOME" | "CHAT" | "ADVANCED" | "MEMORIES" | "PEOPLE" | "SETTINGS";
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>("Home");
-  const [key, setKey] = useState("");
-  const [keyInput, setKeyInput] = useState("");
-  const [espIp, setEspIp] = useState("");
+  const [mode, setMode] = useState<Mode>("HOME");
+  const [apiKey, setApiKey] = useState("");
+  const [espIp, setEspIp] = useState("192.168.4.1");
   const [btConnected, setBtConnected] = useState(false);
-
-  const [msgs, setMsgs] = useState<Msg[]>([]);
-  const [memory, setMemory] = useState("");
+  const [messages, setMessages] = useState<Msg[]>([]);
+  const [inputText, setInputText] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [currentEmotion, setCurrentEmotion] = useState<EmotionTag>("HAPPY");
+  const [activeModel, setActiveModel] = useState<string>("");
+  const [memoryText, setMemoryText] = useState("");
   const [people, setPeople] = useState<Person[]>([]);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [listening, setListening] = useState(false);
-  const [status, setStatus] = useState("Ready");
 
-  const [perm, askPerm] = useCameraPermissions();
-  const [facing, setFacing] = useState<"front" | "back">("back");
-  const [photo, setPhoto] = useState<any>(null);
-  const [vision, setVision] = useState("");
-  const [name, setName] = useState("");
-  const [note, setNote] = useState("");
-  const cam = useRef<CameraView>(null);
+  // Advanced Mode State
+  const [permission, requestPermission] = useCameraPermissions();
+  const [isListening, setIsListening] = useState(false);
+  const cameraRef = useRef<any>(null);
 
+  // Live Animated Face (Eye Blink & Scale Pulse)
+  const blinkAnim = useRef(new Animated.Value(1)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Handle Hardware Back Button for Navigation
+  useEffect(() => {
+    const backAction = () => {
+      if (mode !== "HOME") {
+        setMode("HOME");
+        return true;
+      }
+      return false;
+    };
+    const backHandler = BackHandler.addEventListener(
+      "hardwareBackPress",
+      backAction
+    );
+    return () => backHandler.remove();
+  }, [mode]);
+
+  // Load Saved Configuration on Startup
   useEffect(() => {
     (async () => {
-      const [k, m, h, p, savedIp] = await Promise.all([
-        getKey(),
-        load("pihu_memory", ""),
-        load<Msg[]>("pihu_chat", []),
-        load<Person[]>("pihu_people", []),
-        load("pihu_esp_ip", ""),
-      ]);
-      setKey(k || "");
-      setKeyInput(k || "");
-      setMemory(m);
-      setMsgs(h);
-      setPeople(p);
+      const k = await getKey();
+      if (k) setApiKey(k);
+      const savedIp = await load<string>("pihu_esp_ip", "192.168.4.1");
       setEspIp(savedIp);
+      const savedMem = await load<string>("pihu_memory", "");
+      setMemoryText(savedMem);
+      const savedPeople = await load<Person[]>("pihu_people", []);
+      setPeople(savedPeople);
     })();
   }, []);
 
-  useSpeechRecognitionEvent("start", () => {
-    setListening(true);
-    setStatus("Listening…");
-  });
-  useSpeechRecognitionEvent("end", () => {
-    setListening(false);
-    setStatus("Ready");
-  });
-  useSpeechRecognitionEvent("result", (e) => {
-    const t = e.results?.[0]?.transcript || "";
-    if (e.isFinal && t) setInput(t);
-  });
-  useSpeechRecognitionEvent("error", (e) => {
-    setListening(false);
-    setStatus(e.message || "Voice unavailable");
-  });
-
-  const say = (t: string) =>
-    Speech.speak(t, {
-      language: /[\u0900-\u097F]/.test(t) ? "hi-IN" : "en-IN",
-      rate: 0.96,
-    });
-
-  const detectEmotion = (text: string): string => {
-    const upper = text.toUpperCase();
-    for (const emo of EMOTIONS) {
-      if (upper.includes(emo)) return emo;
-    }
-    return "HAPPY";
-  };
-
-  const syncHardware = async (emotion: string, moveCmd: string = "S") => {
-    const connTag = btConnected ? "BT_OK" : "NO_BT";
-    await sendEspEmotion(espIp, emotion, connTag, moveCmd);
-    if (btConnected) {
-      await sendRobotCommand(moveCmd);
-    }
-  };
-
-  const handleDrive = async (cmd: string) => {
-    setStatus(`Drive: ${cmd}`);
-    await syncHardware("EXCITED", cmd);
-  };
-
-  const send = async (text = input) => {
-    const q = text.trim();
-    if (!q || busy) return;
-    const user: Msg = { role: "user", text: q, time: Date.now() };
-    const next = [...msgs, user];
-    setMsgs(next);
-    setInput("");
-    await save("pihu_chat", next);
-    setBusy(true);
-    setStatus("Thinking…");
-
-    try {
-      const prompt = `Reply as Pihu, a warm AI companion robot. Mention one emotion keyword from [HAPPY, SAD, ANGRY, EXCITED, SHY, JEALOUS, LONELY, CURIOUS, CARING] naturally.\n${
-        memory ? "User memory: " + memory + "\n" : ""
-      }${q}`;
-      const answer = await askGemini(key, prompt, msgs);
-      const all = [...next, { role: "model" as const, text: answer, time: Date.now() }];
-      setMsgs(all);
-      await save("pihu_chat", all);
-
-      const emotion = detectEmotion(answer);
-      await syncHardware(emotion, "S");
-      say(answer);
-      setStatus("Ready");
-    } catch (e: any) {
-      const all = [
-        ...next,
-        { role: "model" as const, text: "Pihu: " + (e.message || "Request failed"), time: Date.now() },
-      ];
-      setMsgs(all);
-      await save("pihu_chat", all);
-      setStatus("Check settings");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const mic = async () => {
-    try {
-      const p = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
-      if (!p.granted) throw new Error("Microphone permission denied");
-      ExpoSpeechRecognitionModule.start({
-        lang: "hi-IN",
-        interimResults: true,
-        continuous: false,
-      });
-    } catch (e: any) {
-      Alert.alert("Voice input", e.message);
-    }
-  };
-
-  const capture = async () => {
-    try {
-      const p = await cam.current?.takePictureAsync({ quality: 0.6, base64: true });
-      if (!p?.base64) throw new Error("No image captured");
-      setPhoto(p);
-      setVision("Photo captured.");
-    } catch (e: any) {
-      Alert.alert("Camera", e.message);
-    }
-  };
-
-  const analyze = async () => {
-    if (!photo?.base64) return Alert.alert("Capture a photo first");
-    setBusy(true);
-    try {
-      const a = await visionGemini(key, photo.base64);
-      setVision(a);
-      await syncHardware("CURIOUS", "S");
-      say(a);
-    } catch (e: any) {
-      setVision(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const savePerson = async () => {
-    if (!name.trim() || !photo?.uri) return Alert.alert("Add a name and capture a photo");
-    const p = [...people, { id: String(Date.now()), name: name.trim(), photo: photo.uri, note }];
-    setPeople(p);
-    await save("pihu_people", p);
-    setName("");
-    setNote("");
-    Alert.alert(
-      "Saved",
-      "Photo profile saved locally. Automatic biometric face matching is not included in this version."
+  // Continuous Eye Blink & Face Motion Animation Loop
+  useEffect(() => {
+    const blinkLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(blinkAnim, {
+          toValue: 0.1,
+          duration: 150,
+          useNativeDriver: true,
+          easing: Easing.linear,
+        }),
+        Animated.timing(blinkAnim, {
+          toValue: 1,
+          duration: 150,
+          useNativeDriver: true,
+          easing: Easing.linear,
+        }),
+        Animated.delay(3500),
+      ])
     );
+
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1.06,
+          duration: 1200,
+          useNativeDriver: true,
+          easing: Easing.ease,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1200,
+          useNativeDriver: true,
+          easing: Easing.ease,
+        }),
+      ])
+    );
+
+    blinkLoop.start();
+    pulseLoop.start();
+
+    return () => {
+      blinkLoop.stop();
+      pulseLoop.stop();
+    };
+  }, []);
+
+  // Sync Emotion and Movement to Hardware (ESP8266 & Arduino UNO)
+  const syncHardware = async (emotion: EmotionTag, move: RobotAction) => {
+    setCurrentEmotion(emotion);
+    if (espIp) {
+      await sendEspEmotion(espIp, emotion);
+    }
+    if (move) {
+      if (espIp) await sendEspMove(espIp, move);
+      if (btConnected) await sendBtMove(move);
+    }
   };
 
-  const Button = ({ label, onPress, alt = false }: any) => (
-    <Pressable
-      onPress={onPress}
-      style={[s.button, alt && { backgroundColor: "#1A2941", borderWidth: 1, borderColor: line }]}
-    >
-      <Text style={s.buttonText}>{label}</Text>
-    </Pressable>
-  );
-  const Card = ({ children }: any) => <View style={s.card}>{children}</View>;
-  const title = (t: string, sub: string) => (
-    <View style={{ gap: 5, marginBottom: 8 }}>
-      <Text style={s.title}>{t}</Text>
-      <Text style={s.muted}>{sub}</Text>
+  // Process Pihu Interaction (Text/Voice/Vision)
+  const processQuery = async (prompt: string, imageBase64?: string) => {
+    if (!prompt.trim() && !imageBase64) return;
+    if (!apiKey.trim()) {
+      Alert.alert("API Key Required", "Please enter your Gemini API key in Settings.");
+      setMode("SETTINGS");
+      return;
+    }
+
+    const userMsg: Msg = { role: "user", text: prompt || "[Camera Frame]", time: Date.now() };
+    setMessages((prev) => [...prev, userMsg]);
+    setLoading(true);
+
+    try {
+      const res = await askGeminiStructured(
+        apiKey,
+        prompt || "Describe this scene and talk to me as Pihu.",
+        messages,
+        memoryText,
+        imageBase64
+      );
+
+      const botMsg: Msg = { role: "model", text: res.reply, time: Date.now() };
+      setMessages((prev) => [...prev, botMsg]);
+      if (res.modelUsed) setActiveModel(res.modelUsed);
+
+      // Hardware Sync & Speech Output
+      await syncHardware(res.emotion, res.move);
+      Speech.speak(res.reply, { language: "hi-IN" });
+    } catch (e: any) {
+      const errText = e?.message || "Communication error";
+      setMessages((prev) => [
+        ...prev,
+        { role: "model", text: `Error: ${errText}`, time: Date.now() },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Advanced Mode Camera Capture & Query
+  const captureAndProcess = async () => {
+    if (cameraRef.current) {
+      try {
+        const photo = await cameraRef.current.takePictureAsync({
+          base64: true,
+          quality: 0.5,
+        });
+        if (photo?.base64) {
+          await processQuery(inputText, photo.base64);
+          setInputText("");
+        }
+      } catch (err) {
+        Alert.alert("Camera Error", "Failed to capture frame from camera.");
+      }
+    }
+  };
+
+  // Voice Command Listener
+  const startSpeechToText = async () => {
+    try {
+      const result = await SpeechRecognition.requestPermissionAsync();
+      if (!result.granted) {
+        Alert.alert("Permission Error", "Microphone access is required for voice commands.");
+        return;
+      }
+      setIsListening(true);
+      SpeechRecognition.start({
+        lang: "hi-IN",
+        interimResults: false,
+        maxAlternatives: 1,
+      });
+      SpeechRecognition.addListener("result", (event: any) => {
+        const text = event.results?.[0]?.transcript;
+        if (text) {
+          setInputText(text);
+          processQuery(text);
+        }
+        setIsListening(false);
+      });
+    } catch (e) {
+      setIsListening(false);
+    }
+  };
+
+  // Render Top Header with Back Navigation
+  const renderHeader = (title: string) => (
+    <View style={styles.headerRow}>
+      {mode !== "HOME" && (
+        <TouchableOpacity style={styles.backBtn} onPress={() => setMode("HOME")}>
+          <Text style={styles.backBtnText}>‹ Back</Text>
+        </TouchableOpacity>
+      )}
+      <Text style={styles.headerTitle}>{title}</Text>
+      {activeModel ? <Text style={styles.modelTag}>{activeModel}</Text> : null}
     </View>
   );
 
   return (
-    <SafeAreaView style={s.root}>
-      <StatusBar style="light" />
-      <View style={s.top}>
-        <Text style={s.brand}>
-          PIHU <Text style={{ color: "#D6AE62" }}>AI</Text>
-        </Text>
-        <Text style={s.muted}>{btConnected ? "HC-05 LINKED" : "HARDWARE MODE"}</Text>
-      </View>
+    <SafeAreaView style={styles.container}>
+      {/* HOME MODE — Visual Interactive Face & Dashboard */}
+      {mode === "HOME" && (
+        <View style={styles.homeContainer}>
+          <Text style={styles.title}>PIHU AI COMPANION</Text>
+          <Text style={styles.statusText}>
+            Status: {btConnected ? "BT Connected" : "BT Disconnected"} | IP: {espIp}
+          </Text>
 
-      <View style={{ flex: 1 }}>
-        {tab === "Home" && (
-          <ScrollView contentContainerStyle={s.page}>
-            {title("Your AI companion", "Phone brain + ESP8266 face + UNO drive + AT110ML audio")}
-            <Card>
-              <View style={s.face}>
-                <View style={{ flexDirection: "row", gap: 34 }}>
-                  <View style={s.eye} />
-                  <View style={s.eye} />
-                </View>
-                <View style={s.smile} />
-              </View>
-              <Text style={s.hero}>Hey, I'm Pihu!</Text>
-              <Text style={s.muted}>{status}</Text>
-            </Card>
-            <View style={s.grid}>
-              {(["Chat", "Vision", "Memory", "Settings"] as Tab[]).map((t) => (
-                <Pressable key={t} style={s.tile} onPress={() => setTab(t)}>
-                  <Text style={{ color: cyan, fontSize: 22 }}>
-                    {t === "Chat" ? "◉" : t === "Vision" ? "◎" : t === "Memory" ? "▤" : "⚙"}
-                  </Text>
-                  <Text style={s.tileText}>{t}</Text>
-                </Pressable>
-              ))}
+          {/* Animated Interactive Face Display */}
+          <Animated.View
+            style={[
+              styles.faceContainer,
+              { transform: [{ scale: pulseAnim }] },
+            ]}
+          >
+            <View style={styles.eyesRow}>
+              <Animated.View
+                style={[
+                  styles.eye,
+                  { transform: [{ scaleY: blinkAnim }] },
+                  currentEmotion === "ANGRY" && styles.eyeAngry,
+                  currentEmotion === "SAD" && styles.eyeSad,
+                ]}
+              />
+              <Animated.View
+                style={[
+                  styles.eye,
+                  { transform: [{ scaleY: blinkAnim }] },
+                  currentEmotion === "ANGRY" && styles.eyeAngry,
+                  currentEmotion === "SAD" && styles.eyeSad,
+                ]}
+              />
             </View>
-            <Card>
-              <Text style={s.cardTitle}>Robot motion controls (HC-05)</Text>
-              <Text style={s.muted}>
-                Sends F, B, L, R, S over HC-05 and updates ESP8266 movement status.
-              </Text>
-              <View style={s.row}>
-                <Button label="↑ Forward" alt onPress={() => handleDrive("F")} />
-                <Button label="STOP" onPress={() => handleDrive("S")} />
-              </View>
-              <View style={s.row}>
-                <Button label="← Left" alt onPress={() => handleDrive("L")} />
-                <Button label="Right →" alt onPress={() => handleDrive("R")} />
-                <Button label="↓ Back" alt onPress={() => handleDrive("B")} />
-              </View>
-            </Card>
-          </ScrollView>
-        )}
-
-        {tab === "Chat" && (
-          <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-            <View style={s.pad}>{title("Chat with Pihu", "Hindi · English · Hinglish")}</View>
-            <FlatList
-              style={{ flex: 1 }}
-              contentContainerStyle={{ padding: 14, gap: 10 }}
-              data={msgs}
-              keyExtractor={(m, i) => m.time + "-" + i}
-              renderItem={({ item }) => (
-                <View
-                  style={[
-                    s.bubble,
-                    item.role === "user"
-                      ? { alignSelf: "flex-end", backgroundColor: "#243D70" }
-                      : { alignSelf: "flex-start", backgroundColor: panel },
-                  ]}
-                >
-                  <Text style={s.msg}>{item.text}</Text>
-                  {item.role === "model" && (
-                    <Text style={{ color: cyan }} onPress={() => say(item.text)}>
-                      ▶ Speak
-                    </Text>
-                  )}
-                </View>
-              )}
-              ListEmptyComponent={<Text style={s.muted}>Say hello to begin.</Text>}
+            <View
+              style={[
+                styles.mouth,
+                currentEmotion === "HAPPY" || currentEmotion === "EXCITED"
+                  ? styles.mouthHappy
+                  : currentEmotion === "SAD"
+                  ? styles.mouthSad
+                  : styles.mouthNeutral,
+              ]}
             />
-            {busy && <ActivityIndicator color={cyan} />}
-            <View style={s.composer}>
-              <Pressable
-                onPress={listening ? () => ExpoSpeechRecognitionModule.stop() : mic}
-                style={s.mic}
-              >
-                <Text style={{ fontSize: 19 }}>{listening ? "■" : "🎙"}</Text>
-              </Pressable>
-              <TextInput
-                value={input}
-                onChangeText={setInput}
-                placeholder="Message Pihu…"
-                placeholderTextColor={muted}
-                style={s.input}
-              />
-              <Pressable onPress={() => send()} style={s.send}>
-                <Text style={{ color: white, fontSize: 20 }}>➤</Text>
-              </Pressable>
-            </View>
-          </KeyboardAvoidingView>
-        )}
+            <Text style={styles.emotionLabel}>{currentEmotion}</Text>
+          </Animated.View>
 
-        {tab === "Vision" && (
-          <ScrollView contentContainerStyle={s.page}>
-            {title("Pihu Vision", "Camera-based scene understanding")}
-            {!perm?.granted ? (
-              <Card>
-                <Text style={s.cardTitle}>Camera permission needed</Text>
-                <Button label="Allow camera" onPress={askPerm} />
-              </Card>
-            ) : (
-              <View style={{ height: 330, borderRadius: 18, overflow: "hidden" }}>
-                <CameraView ref={cam} style={{ flex: 1 }} facing={facing} />
-                <View style={[s.row, { position: "absolute", bottom: 10, alignSelf: "center" }]}>
-                  <Button label="Capture" onPress={capture} />
-                  <Button
-                    label="Flip"
-                    alt
-                    onPress={() => setFacing(facing === "back" ? "front" : "back")}
-                  />
+          {/* Core Navigation Buttons */}
+          <View style={styles.menuGrid}>
+            <TouchableOpacity style={styles.menuCard} onPress={() => setMode("CHAT")}>
+              <Text style={styles.menuIcon}>💬</Text>
+              <Text style={styles.menuTitle}>Chat & Voice</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.menuCard} onPress={() => setMode("ADVANCED")}>
+              <Text style={styles.menuIcon}>🎥</Text>
+              <Text style={styles.menuTitle}>Advanced Vision Mode</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.menuCard} onPress={() => setMode("MEMORIES")}>
+              <Text style={styles.menuIcon}>🧠</Text>
+              <Text style={styles.menuTitle}>Memory Notes</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.menuCard} onPress={() => setMode("SETTINGS")}>
+              <Text style={styles.menuIcon}>⚙️</Text>
+              <Text style={styles.menuTitle}>Hardware Settings</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* ADVANCED MODE — Camera Vision + Real-Time Command & Control */}
+      {mode === "ADVANCED" && (
+        <View style={styles.flexContainer}>
+          {renderHeader("Advanced Vision & Hardware Control")}
+          {!permission?.granted ? (
+            <View style={styles.centered}>
+              <Text style={styles.darkText}>Camera permission is required.</Text>
+              <TouchableOpacity style={styles.actionBtn} onPress={requestPermission}>
+                <Text style={styles.actionBtnText}>Grant Camera Permission</Text>
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <View style={styles.flexContainer}>
+              <CameraView style={styles.cameraPreview} ref={cameraRef}>
+                <View style={styles.cameraOverlay}>
+                  <Text style={styles.overlayText}>Live Robot Vision Sync</Text>
+                </View>
+              </CameraView>
+
+              {/* Manual Direct Motor Drive Pad */}
+              <View style={styles.drivePadContainer}>
+                <Text style={styles.padTitle}>Manual Override Commands</Text>
+                <View style={styles.driveRow}>
+                  <TouchableOpacity
+                    style={styles.driveBtn}
+                    onPress={() => syncHardware(currentEmotion, "F")}
+                  >
+                    <Text style={styles.driveText}>▲ Forward</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.driveRow}>
+                  <TouchableOpacity
+                    style={styles.driveBtn}
+                    onPress={() => syncHardware(currentEmotion, "L")}
+                  >
+                    <Text style={styles.driveText}>◄ Left</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.driveBtn, styles.stopBtn]}
+                    onPress={() => syncHardware(currentEmotion, "S")}
+                  >
+                    <Text style={styles.driveText}>■ STOP</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.driveBtn}
+                    onPress={() => syncHardware(currentEmotion, "R")}
+                  >
+                    <Text style={styles.driveText}>Right ►</Text>
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.driveRow}>
+                  <TouchableOpacity
+                    style={styles.driveBtn}
+                    onPress={() => syncHardware(currentEmotion, "B")}
+                  >
+                    <Text style={styles.driveText}>▼ Back</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
-            )}
-            <Card>
-              <Text style={s.cardTitle}>Understand the scene</Text>
-              <Text style={s.muted}>
-                Captured photo is sent to Gemini for description. Do not use this to identify people.
-              </Text>
-              <Button label="Analyze photo" onPress={analyze} />
-              {busy && <ActivityIndicator color={cyan} />}
-              <Text style={s.msg}>{vision}</Text>
-            </Card>
-            <Card>
-              <Text style={s.cardTitle}>Save person photo profile</Text>
-              <Text style={s.muted}>
-                Stores a named photo locally. Automatic biometric face matching is not in v1.0.
-              </Text>
-              {photo?.uri && (
-                <Image source={{ uri: photo.uri }} style={{ width: 90, height: 90, borderRadius: 14 }} />
-              )}
-              <TextInput
-                value={name}
-                onChangeText={setName}
-                placeholder="Person's name"
-                placeholderTextColor={muted}
-                style={s.input}
-              />
-              <TextInput
-                value={note}
-                onChangeText={setNote}
-                placeholder="Optional note"
-                placeholderTextColor={muted}
-                style={s.input}
-              />
-              <Button label="Save profile" onPress={savePerson} />
-            </Card>
-          </ScrollView>
-        )}
 
-        {tab === "Memory" && (
-          <ScrollView contentContainerStyle={s.page}>
-            {title("Pihu Memory", "Saved on this phone")}
-            <Card>
-              <Text style={s.cardTitle}>Personal memory notes</Text>
-              <TextInput
-                value={memory}
-                onChangeText={setMemory}
-                multiline
-                placeholder="My name is… I like… My current project is…"
-                placeholderTextColor={muted}
-                style={[s.input, { height: 120, textAlignVertical: "top" }]}
-              />
-              <Button
-                label="Save memory"
-                onPress={async () => {
-                  await save("pihu_memory", memory);
-                  Alert.alert("Saved", "Memory saved on this phone.");
-                }}
-              />
-            </Card>
-            <Card>
-              <Text style={s.cardTitle}>People ({people.length})</Text>
-              {people.map((p) => (
-                <View key={p.id} style={s.row}>
-                  {p.photo ? (
-                    <Image source={{ uri: p.photo }} style={{ width: 46, height: 46, borderRadius: 10 }} />
-                  ) : null}
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.msg}>{p.name}</Text>
-                    <Text style={s.muted}>{p.note}</Text>
-                  </View>
-                  <Text
-                    style={{ color: "#FF6B78" }}
-                    onPress={async () => {
-                      const n = people.filter((x) => x.id !== p.id);
-                      setPeople(n);
-                      await save("pihu_people", n);
-                    }}
-                  >
-                    Delete
-                  </Text>
-                </View>
-              ))}
-              {!people.length && <Text style={s.muted}>No profiles yet.</Text>}
-            </Card>
-            <Card>
-              <Text style={s.cardTitle}>Chat history</Text>
-              <Text style={s.muted}>{msgs.length} messages saved.</Text>
-              <Button
-                label="Clear chat"
-                alt
-                onPress={() =>
-                  Alert.alert("Clear chat?", "This cannot be undone.", [
-                    { text: "Cancel" },
-                    {
-                      text: "Clear",
-                      onPress: async () => {
-                        setMsgs([]);
-                        await save("pihu_chat", []);
-                      },
-                    },
-                  ])
-                }
-              />
-            </Card>
-          </ScrollView>
-        )}
+              {/* Bottom Interactive Bar */}
+              <View style={styles.advInputRow}>
+                <TouchableOpacity
+                  style={[styles.micBtn, isListening && styles.micActive]}
+                  onPress={startSpeechToText}
+                >
+                  <Text style={styles.micText}>{isListening ? "🎙️..." : "🎙️ Voice"}</Text>
+                </TouchableOpacity>
 
-        {tab === "Settings" && (
-          <ScrollView contentContainerStyle={s.page}>
-            {title("Settings", "Configure Pihu's AI brain & hardware links")}
-            <Card>
-              <Text style={s.cardTitle}>ESP8266 TFT IP Address</Text>
-              <TextInput
-                value={espIp}
-                onChangeText={async (v) => {
-                  setEspIp(v);
-                  await save("pihu_esp_ip", v);
-                }}
-                placeholder="e.g. 192.168.43.120"
-                placeholderTextColor={muted}
-                style={s.input}
-              />
-              <Button label="Test ESP Face" onPress={() => syncHardware("EXCITED", "S")} />
-            </Card>
-            <Card>
-              <Text style={s.cardTitle}>Arduino HC-05 Bluetooth</Text>
-              <Button
-                label={btConnected ? "HC-05 Connected" : "Connect HC-05"}
-                onPress={async () => {
-                  const ok = await connectHc05("HC-05");
-                  setBtConnected(ok);
-                  Alert.alert(
-                    ok ? "Connected" : "Not Connected",
-                    ok ? "Connected to HC-05." : "Pair HC-05 in Android Bluetooth settings first."
-                  );
-                }}
-              />
-            </Card>
-            <Card>
-              <Text style={s.cardTitle}>Gemini API key</Text>
-              <Text style={s.muted}>
-                Paste your key. Stored with Android SecureStore. Personal prototype only; a public app needs a protected backend.
-              </Text>
-              <TextInput
-                value={keyInput}
-                onChangeText={setKeyInput}
-                secureTextEntry
-                autoCapitalize="none"
-                placeholder="Gemini API key"
-                placeholderTextColor={muted}
-                style={s.input}
-              />
-              <Button
-                label="Save API key"
-                onPress={async () => {
-                  await putKey(keyInput);
-                  setKey(keyInput);
-                  Alert.alert("Saved", "API key saved securely on this device.");
-                }}
-              />
-              <Text style={{ color: key ? "#62D6A4" : "#FFB86B" }}>
-                {key ? "● API key saved" : "○ API key not configured"}
-              </Text>
-            </Card>
-          </ScrollView>
-        )}
-      </View>
+                <TextInput
+                  style={styles.advInput}
+                  placeholder="Ask Pihu while viewing scene..."
+                  placeholderTextColor="#888"
+                  value={inputText}
+                  onChangeText={setInputText}
+                />
 
-      <View style={s.nav}>
-        {(["Home", "Chat", "Vision", "Memory", "Settings"] as Tab[]).map((t) => (
-          <Pressable key={t} onPress={() => setTab(t)} style={{ flex: 1, alignItems: "center", gap: 3 }}>
-            <Text style={{ color: tab === t ? cyan : muted, fontSize: 12, fontWeight: "800" }}>
-              {t === "Home" ? "⌂" : t === "Chat" ? "◉" : t === "Vision" ? "◎" : t === "Memory" ? "▤" : "⚙"}
+                <TouchableOpacity
+                  style={styles.snapBtn}
+                  onPress={captureAndProcess}
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={styles.snapBtnText}>Snap & Ask</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </View>
+      )}
+
+      {/* CHAT MODE */}
+      {mode === "CHAT" && (
+        <View style={styles.flexContainer}>
+          {renderHeader("Chat with Pihu")}
+          <ScrollView style={styles.chatScroll}>
+            {messages.map((m, idx) => (
+              <View
+                key={idx}
+                style={[
+                  styles.msgBubble,
+                  m.role === "user" ? styles.msgUser : styles.msgModel,
+                ]}
+              >
+                <Text style={styles.msgText}>{m.text}</Text>
+              </View>
+            ))}
+            {loading && <ActivityIndicator size="small" color="#4a90e2" />}
+          </ScrollView>
+
+          <View style={styles.advInputRow}>
+            <TouchableOpacity style={styles.micBtn} onPress={startSpeechToText}>
+              <Text style={styles.micText}>🎙️</Text>
+            </TouchableOpacity>
+            <TextInput
+              style={styles.advInput}
+              placeholder="Type message..."
+              placeholderTextColor="#888"
+              value={inputText}
+              onChangeText={setInputText}
+            />
+            <TouchableOpacity
+              style={styles.snapBtn}
+              onPress={() => {
+                const txt = inputText;
+                setInputText("");
+                processQuery(txt);
+              }}
+            >
+              <Text style={styles.snapBtnText}>Send</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* MEMORIES MODE */}
+      {mode === "MEMORIES" && (
+        <View style={styles.flexContainer}>
+          {renderHeader("Robot Memory Notes")}
+          <View style={styles.padded}>
+            <Text style={styles.darkText}>
+              Store personal preferences & memory context for Pihu:
             </Text>
-            <Text style={{ color: tab === t ? cyan : muted, fontSize: 10 }}>{t}</Text>
-          </Pressable>
-        ))}
-      </View>
+            <TextInput
+              style={styles.memoryBox}
+              multiline
+              value={memoryText}
+              onChangeText={setMemoryText}
+              placeholder="e.g. My name is Alex, I am building a robot..."
+            />
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={async () => {
+                await save("pihu_memory", memoryText);
+                Alert.alert("Saved", "Memory notes updated successfully.");
+              }}
+            >
+              <Text style={styles.actionBtnText}>Save Memory</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
+
+      {/* SETTINGS MODE */}
+      {mode === "SETTINGS" && (
+        <ScrollView style={styles.flexContainer}>
+          {renderHeader("Hardware & API Setup")}
+          <View style={styles.padded}>
+            <Text style={styles.label}>Gemini API Key:</Text>
+            <TextInput
+              style={styles.input}
+              secureTextEntry
+              value={apiKey}
+              onChangeText={setApiKey}
+              placeholder="Paste API Key here..."
+            />
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={async () => {
+                await putKey(apiKey);
+                Alert.alert("Success", "Gemini API key saved securely.");
+              }}
+            >
+              <Text style={styles.actionBtnText}>Save API Key</Text>
+            </TouchableOpacity>
+
+            <Text style={[styles.label, { marginTop: 20 }]}>ESP8266 TFT IP Address:</Text>
+            <TextInput
+              style={styles.input}
+              value={espIp}
+              onChangeText={setEspIp}
+              placeholder="192.168.4.1"
+            />
+            <TouchableOpacity
+              style={styles.actionBtn}
+              onPress={async () => {
+                await save("pihu_esp_ip", espIp);
+                Alert.alert("Saved", "ESP8266 IP address saved.");
+              }}
+            >
+              <Text style={styles.actionBtnText}>Save IP</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.actionBtn, { marginTop: 25, backgroundColor: "#2e7d32" }]}
+              onPress={async () => {
+                const devs = await scanBtDevices();
+                const target = devs.find((d: any) =>
+                  (d.name || "").includes("HC-05")
+                );
+                if (target) {
+                  const ok = await connectBt(target.address);
+                  setBtConnected(ok);
+                  Alert.alert(ok ? "Connected" : "Failed", ok ? "HC-05 Paired!" : "Connection failed.");
+                } else {
+                  Alert.alert("Not Found", "HC-05 Bluetooth module not found in paired list.");
+                }
+              }}
+            >
+              <Text style={styles.actionBtnText}>Connect HC-05 Bluetooth</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
 
-const s = StyleSheet.create({
-  root: { flex: 1, backgroundColor: bg },
-  top: {
-    height: 54,
-    paddingHorizontal: 18,
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: "#0f172a" },
+  flexContainer: { flex: 1 },
+  homeContainer: { flex: 1, alignItems: "center", padding: 20 },
+  title: { fontSize: 24, fontWeight: "bold", color: "#38bdf8", marginTop: 10 },
+  statusText: { color: "#94a3b8", fontSize: 12, marginVertical: 8 },
+  headerRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    borderBottomWidth: 1,
-    borderColor: line,
+    padding: 15,
+    backgroundColor: "#1e293b",
   },
-  brand: { fontSize: 21, fontWeight: "900", letterSpacing: 2, color: white },
-  muted: { color: muted, fontSize: 12, lineHeight: 18 },
-  page: { padding: 15, gap: 13, paddingBottom: 25 },
-  pad: { padding: 15 },
-  title: { fontSize: 23, fontWeight: "900", color: white },
-  card: { backgroundColor: panel, borderWidth: 1, borderColor: line, borderRadius: 18, padding: 15, gap: 10 },
-  face: {
-    height: 110,
-    width: 165,
-    alignSelf: "center",
-    backgroundColor: "#050A14",
-    borderColor: cyan,
-    borderWidth: 2,
-    borderRadius: 32,
-    alignItems: "center",
+  headerTitle: { color: "#f8fafc", fontSize: 18, fontWeight: "bold" },
+  backBtn: { padding: 5, backgroundColor: "#334155", borderRadius: 5 },
+  backBtnText: { color: "#38bdf8", fontWeight: "bold" },
+  modelTag: { color: "#4ade80", fontSize: 10, fontWeight: "600" },
+  faceContainer: {
+    width: 220,
+    height: 180,
+    backgroundColor: "#0284c7",
+    borderRadius: 30,
     justifyContent: "center",
-    gap: 10,
+    alignItems: "center",
+    marginVertical: 20,
+    borderWidth: 4,
+    borderColor: "#38bdf8",
   },
-  eye: { width: 23, height: 28, borderRadius: 15, backgroundColor: cyan },
-  smile: { width: 28, height: 10, borderBottomWidth: 3, borderColor: cyan, borderRadius: 20 },
-  hero: { color: white, fontSize: 22, fontWeight: "900", textAlign: "center" },
-  grid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  tile: {
+  eyesRow: { flexDirection: "row", justifyContent: "space-around", width: "70%" },
+  eye: { width: 35, height: 35, backgroundColor: "#ffffff", borderRadius: 20 },
+  eyeAngry: { backgroundColor: "#ef4444", transform: [{ rotate: "15deg" }] },
+  eyeSad: { backgroundColor: "#93c5fd" },
+  mouth: { width: 60, height: 16, backgroundColor: "#ffffff", borderRadius: 8, marginTop: 25 },
+  mouthHappy: { height: 26, borderBottomLeftRadius: 20, borderBottomRightRadius: 20 },
+  mouthSad: { height: 16, borderTopLeftRadius: 15, borderTopRightRadius: 15 },
+  mouthNeutral: { height: 10 },
+  emotionLabel: { color: "#e0f2fe", fontSize: 12, fontWeight: "bold", marginTop: 12 },
+  menuGrid: { width: "100%", flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between" },
+  menuCard: {
     width: "48%",
-    flexGrow: 1,
-    backgroundColor: panel,
-    borderWidth: 1,
-    borderColor: line,
-    borderRadius: 16,
+    backgroundColor: "#1e293b",
     padding: 16,
-    gap: 7,
+    borderRadius: 15,
+    alignItems: "center",
+    marginBottom: 15,
   },
-  tileText: { color: white, fontWeight: "800" },
-  row: { flexDirection: "row", gap: 8, alignItems: "center" },
-  button: { backgroundColor: blue, padding: 12, borderRadius: 12, alignItems: "center", justifyContent: "center", flex: 1 },
-  buttonText: { color: white, fontSize: 12, fontWeight: "800" },
-  bubble: { padding: 13, borderRadius: 16, maxWidth: "88%", gap: 8 },
-  msg: { color: white, fontSize: 14, lineHeight: 21 },
-  composer: { flexDirection: "row", alignItems: "center", padding: 10, gap: 8, borderTopWidth: 1, borderColor: line },
-  mic: { width: 45, height: 45, borderRadius: 14, backgroundColor: "#1A2941", alignItems: "center", justifyContent: "center" },
-  input: {
-    flex: 1,
-    minHeight: 45,
-    backgroundColor: "#182338",
-    borderWidth: 1,
-    borderColor: line,
-    borderRadius: 12,
-    padding: 11,
-    color: white,
-  },
-  send: { width: 45, height: 45, borderRadius: 14, backgroundColor: blue, alignItems: "center", justifyContent: "center" },
-  cardTitle: { color: white, fontSize: 16, fontWeight: "800" },
-  nav: { height: 62, flexDirection: "row", alignItems: "center", borderTopWidth: 1, borderColor: line, backgroundColor: "#0D1422" },
-});
+  menuIcon: { fontSize: 28 },
+  menuTitle: { color: "#f8fafc", marginTop: 8, fontSize: 13, fontWeight: "600" },
+  cameraPreview: { flex: 1, width: "100%" },
+  cameraOverlay: { padding: 10, backgroundColor: "rgba(0,0,0,0.5)" },
+  overlayText: { color: "#fff", fontSize: 12, textAlign: "center" },
+  drivePadContainer: { backgroundColor: "#1e293b", padding: 12, alignItems: "center" },
+  padTitle: { color: "#94a3b8", fontSize: 11, marginBottom: 6 },
+  driveRow: { flexDirection: "row", marginVertical: 4 },
+  driveBtn: { backgroundColor: "#334155", paddingVertical: 8, paddingHorizontal: 1
