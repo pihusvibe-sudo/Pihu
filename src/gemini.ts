@@ -1,15 +1,96 @@
-const API = "https://generativelanguage.googleapis.com/v1beta/models/";
+import { Msg } from "./store";
+
 const MODEL = "gemini-2.5-flash";
-export async function askGemini(key:string, prompt:string, history:{role:"user"|"model";text:string}[]) {
- if(!key) throw new Error("Settings में Gemini API key जोड़ो।");
- const contents=[...history.slice(-12).map(m=>({role:m.role,parts:[{text:m.text}]})),{role:"user",parts:[{text:prompt}]}];
- const r=await fetch(`${API}${MODEL}:generateContent?key=${encodeURIComponent(key)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({systemInstruction:{parts:[{text:"You are Pihu, a friendly, witty and helpful personal AI companion. Reply naturally in Hindi, English or Hinglish matching the user. Be honest about limitations. Do not claim physical robot control."}]},contents,generationConfig:{temperature:0.7,maxOutputTokens:700}})});
- const d=await r.json(); if(!r.ok) throw new Error(d?.error?.message||`Gemini error ${r.status}`);
- const a=d?.candidates?.[0]?.content?.parts?.map((p:any)=>p.text||"").join("").trim(); if(!a) throw new Error("Gemini returned no answer."); return a;
+const BASE_URL = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`;
+
+function requireKey(key: string): string {
+  const clean = (key || "").trim();
+  if (!clean) {
+    throw new Error("Gemini API key missing. Open Settings and save your API key.");
+  }
+  return clean;
 }
-export async function visionGemini(key:string,base64:string){
- if(!key) throw new Error("Settings में Gemini API key जोड़ो।");
- const r=await fetch(`${API}${MODEL}:generateContent?key=${encodeURIComponent(key)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({contents:[{role:"user",parts:[{text:"Describe visible objects and the scene for the user. Do not identify people or infer sensitive traits."},{inline_data:{mime_type:"image/jpeg",data:base64}}]}],generationConfig:{maxOutputTokens:400}})});
- const d=await r.json(); if(!r.ok) throw new Error(d?.error?.message||`Gemini error ${r.status}`);
- return d?.candidates?.[0]?.content?.parts?.map((p:any)=>p.text||"").join("").trim()||"No description returned.";
+
+export async function askGemini(
+  apiKey: string,
+  prompt: string,
+  history: Msg[] = []
+): Promise<string> {
+  const cleanKey = requireKey(apiKey);
+
+  const contents = [
+    ...history.slice(-10).map((m) => ({
+      role: m.role === "model" ? "model" : "user",
+      parts: [{ text: m.text }],
+    })),
+    {
+      role: "user",
+      parts: [{ text: prompt }],
+    },
+  ];
+
+  const res = await fetch(`${BASE_URL}?key=${encodeURIComponent(cleanKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ contents }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data?.error?.message || `Gemini request failed (${res.status})`);
+  }
+
+  const text =
+    data?.candidates?.[0]?.content?.parts
+      ?.map((p: { text?: string }) => p.text || "")
+      .join("")
+      .trim() || "";
+
+  if (!text) {
+    throw new Error("Empty reply from Gemini.");
+  }
+  return text;
+}
+
+export async function visionGemini(apiKey: string, base64Image: string): Promise<string> {
+  const cleanKey = requireKey(apiKey);
+
+  const res = await fetch(`${BASE_URL}?key=${encodeURIComponent(cleanKey)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: "Describe what you see in this camera frame briefly and naturally in Hindi/Hinglish as Pihu, an AI robot friend.",
+            },
+            {
+              inlineData: {
+                mimeType: "image/jpeg",
+                data: base64Image,
+              },
+            },
+          ],
+        },
+      ],
+    }),
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data?.error?.message || `Vision request failed (${res.status})`);
+  }
+
+  const text =
+    data?.candidates?.[0]?.content?.parts
+      ?.map((p: { text?: string }) => p.text || "")
+      .join("")
+      .trim() || "";
+
+  if (!text) {
+    throw new Error("Empty vision reply from Gemini.");
+  }
+  return text;
 }
