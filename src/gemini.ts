@@ -184,3 +184,4 @@ export async function askGeminiStructured(
     "Reply briefly and naturally in Hindi, English, or Hinglish matching the user.",
     "If the user asks to move/drive/turn/stop the robot, include [MOVE:F], [MOVE:B], [MOVE:L], [MOVE:R], or [MOVE:S].",
     "Always end your response with [EMOTION:TAG] where TAG is one of HAPPY, SAD, ANGRY, EXCITED, SHY, JEALOUS, LONELY, CURIOUS, CARING.",
+  ];
